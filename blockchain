@@ -1,0 +1,533 @@
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
+
+namespace block
+{
+    public class DataBlock
+    {
+        public Container C1;
+        public Container C2;
+        public Container C3;
+        public Container C4;
+
+
+        public DataBlock(Container cc1, Container cc2, Container cc3, Container cc4)
+        {
+            C1 = cc1;
+            C2 = cc2;
+            C3 = cc3;
+            C4 = cc4;
+        }
+
+        public static byte[] Combine(byte[] first, byte[] second)
+        {
+            byte[] ret = new byte[first.Length + second.Length];
+            Buffer.BlockCopy(first, 0, ret, 0, first.Length);
+            Buffer.BlockCopy(second, 0, ret, first.Length, second.Length);
+            return ret;
+        }
+        public byte[] calculateroot(DataBlock d)
+        {
+            byte[] b1 = d.C1.shaContainer(d.C1);
+            byte[] b2 = d.C2.shaContainer(d.C2);
+            byte[] b3 = d.C3.shaContainer(d.C3);
+            byte[] b4 = d.C4.shaContainer(d.C4);
+
+            byte[] lvl2_1 = Combine(b1, b2);
+            byte[] lvl2_2 = Combine(b3, b4);
+            using (SHA512 sha = new SHA512Managed())
+            {
+                byte[] sha_lvl2_1 = sha.ComputeHash(lvl2_1);
+                byte[] sha_lvl2_2 = sha.ComputeHash(lvl2_2);
+
+                byte[] preRoot = Combine(sha_lvl2_1, sha_lvl2_2);
+                return sha.ComputeHash(preRoot);
+            }
+        }
+
+
+    }
+
+    public class User
+    {
+        public string userID;
+        public string pKey;
+
+        public User()
+        {
+            var cryptoServiceProvider = new RSACryptoServiceProvider(2048); //2048 - Długość klucza
+            var privateKey = cryptoServiceProvider.ExportParameters(true); //Generowanie klucza prywatnego
+            var publicKey = cryptoServiceProvider.ExportParameters(true); //Generowanie klucza publiczny
+
+            userID = GetKeyString(publicKey);
+            pKey = GetKeyString(privateKey);
+        }
+
+        public static string GetKeyString(RSAParameters publicKey)
+        {
+
+            var stringWriter = new System.IO.StringWriter();
+            var xmlSerializer = new System.Xml.Serialization.XmlSerializer(typeof(RSAParameters));
+            xmlSerializer.Serialize(stringWriter, publicKey);
+            return stringWriter.ToString();
+        }
+
+    }
+
+
+
+
+
+
+    public class Container
+    {
+        public int ID;
+        public string WE;
+        public string NS;
+        public float temperature;
+        public float humidity;
+        public DateTime timestamp;
+        public string userID;
+        public string ssha512;
+        public string signed;
+
+        public Container(int id)
+        {
+            ID = id;
+            WE = "23,0653W";
+            NS = "23,0653N";
+            humidity = 0.8F;
+            temperature = 28.3F;
+            timestamp = DateTime.Now;
+            userID = null;
+            ssha512 = null;
+            signed = null;
+        }
+
+
+        public byte[] shaContainer(Container a)
+        {
+
+            using (SHA512 sha = new SHA512Managed())
+            using (MemoryStream st = new MemoryStream())
+            using (BinaryWriter bw = new BinaryWriter(st))
+            {
+                bw.Write(a.ID);
+                bw.Write(a.WE);
+                bw.Write(a.NS);
+                bw.Write(a.timestamp.ToBinary());
+                bw.Write(a.humidity);
+                bw.Write(a.temperature);
+                var starr = st.ToArray();
+
+                return sha.ComputeHash(starr);
+            }
+        }
+
+
+
+
+
+        public static string Decrypt(string textToDecrypt, string privateKeyString)
+        {
+            var bytesToDescrypt = Encoding.UTF8.GetBytes(textToDecrypt);
+
+            using (var rsa = new RSACryptoServiceProvider(2048))
+            {
+                try
+                {
+
+                    // server decrypting data with private key                    
+                    rsa.FromXmlString(privateKeyString);
+
+                    var resultBytes = Convert.FromBase64String(textToDecrypt);
+                    var decryptedBytes = rsa.Decrypt(resultBytes, true);
+                    var decryptedData = Encoding.UTF8.GetString(decryptedBytes);
+                    return decryptedData.ToString();
+                }
+                finally
+                {
+                    rsa.PersistKeyInCsp = false;
+                }
+            }
+        }
+
+        public string Encrypt(string textToEncrypt, string publicKeyString)
+        {
+            var bytesToEncrypt = Encoding.UTF8.GetBytes(textToEncrypt);
+
+            using (var rsa = new RSACryptoServiceProvider(2048))
+            {
+                try
+                {
+                    rsa.FromXmlString(publicKeyString.ToString());
+                    var encryptedData = rsa.Encrypt(bytesToEncrypt, true);
+                    var base64Encrypted = Convert.ToBase64String(encryptedData);
+                    return base64Encrypted;
+                }
+                finally
+                {
+                    rsa.PersistKeyInCsp = false;
+                }
+            }
+        }
+
+    }
+
+    public static class BlockChainExtension
+    {
+        public static byte[] GenerateHash(this IBlock block)
+        {
+            using (SHA512 sha = new SHA512Managed())
+            using (MemoryStream st = new MemoryStream())
+            using (BinaryWriter bw = new BinaryWriter(st))
+            {
+                bw.Write(block.Data);
+                bw.Write(block.Nonce);
+                bw.Write(block.TimeStamp.ToBinary());
+                bw.Write(block.PrevHash);
+                var starr = st.ToArray();
+                return sha.ComputeHash(starr);
+            }
+        }
+        public static byte[] MineHash(this IBlock block, byte[] difficulty)
+        {
+            if (difficulty == null) throw new ArgumentNullException(nameof(difficulty));
+
+            byte[] hash = new byte[0];
+            int d = difficulty.Length;
+            while (!hash.Take(2).SequenceEqual(difficulty))
+            {
+                block.Nonce++;
+                hash = block.GenerateHash();
+            }
+            return hash;
+        }
+        public static bool IsValid(this IBlock block)
+        {
+            var bk = block.GenerateHash();
+            return block.Hash.SequenceEqual(bk);
+        }
+        public static bool IsValidPrevBlock(this IBlock block, IBlock prevBlock)
+        {
+            if (prevBlock == null) throw new ArgumentNullException(nameof(prevBlock));
+
+            var prev = prevBlock.GenerateHash();
+            return prevBlock.IsValid() && block.PrevHash.SequenceEqual(prev);
+        }
+        public static bool IsValid(this IEnumerable<IBlock> items)
+        {
+            var enumerable = items.ToList();
+            return enumerable.Zip(enumerable.Skip(1), Tuple.Create).All(block => block.Item2.IsValid());
+        }
+
+
+
+
+    }
+
+    public interface IBlock
+
+    {
+        byte[] Data { get; }
+        byte[] Hash { get; set; }
+        int Nonce { get; set; }
+        byte[] PrevHash { get; set; }
+        DateTime TimeStamp { get; }
+    }
+
+    public class Block : IBlock
+    {
+
+        public Block(byte[] data)
+        {
+            Data = data ?? throw new ArgumentNullException(nameof(data));
+            Nonce = 0;
+            PrevHash = new byte[] { 0x00 };
+            TimeStamp = DateTime.Now;
+        }
+        public byte[] Data { get; }
+        public byte[] Hash { get; set; }
+        public int Nonce { get; set; }
+        public byte[] PrevHash { get; set; }
+        public DateTime TimeStamp { get; }
+
+        public override string ToString()
+        {
+            return $"{BitConverter.ToString(Hash).Replace("-", "")}:\n{BitConverter.ToString(PrevHash).Replace("-", "")}:\n{Nonce} {TimeStamp}";
+        }
+
+    }
+
+    public class BlockChain : IEnumerable<IBlock>
+    {
+        public List<IBlock> _items = new List<IBlock>();
+        public BlockChain(byte[] difficulty, IBlock genesis)
+        {
+            Difficulty = difficulty;
+            genesis.Hash = genesis.MineHash(difficulty);
+            Items.Add(genesis);
+        }
+
+        public void Add(IBlock item)
+        {
+            if (Items.LastOrDefault() != null)
+            {
+                item.PrevHash = Items.LastOrDefault()?.Hash;
+
+            }
+            item.Hash = item.MineHash(Difficulty);
+            Items.Add(item);
+        }
+        public int Count => Items.Count;
+        public IBlock this[int index]
+        {
+            get => Items[index];
+            set => Items[index] = value;
+        }
+        public List<IBlock> Items
+        {
+            get => _items;
+            set => _items = value;
+        }
+        public byte[] Difficulty { get; }
+        public IEnumerator<IBlock> GetEnumerator()
+        {
+            return Items.GetEnumerator();
+        }
+
+        IEnumerator IEnumerable.GetEnumerator()
+        {
+            return Items.GetEnumerator();
+        }
+    }
+    class Program
+    {
+
+
+        static void Main(string[] args)
+        {
+
+            Random rnd = new Random(DateTime.UtcNow.Millisecond);
+            IBlock genesis = new Block(new byte[] { 0x00, 0x00, 0x00, 0x00 });
+            byte[] difficulty = new byte[] { 0x00, 0x00 };
+
+            BlockChain chain = new BlockChain(difficulty, genesis);
+
+            int counter = 0;
+            int counter_container = 0;
+            List<Container> buffer = new List<Container>();
+            List<DataBlock> DataBlockList = new List<DataBlock>();
+            User u = new User();
+            while (true)
+            {
+
+                Console.WriteLine();
+                Console.WriteLine("--------------MENU------------------");
+                Console.WriteLine("Wybierz opcję:");
+                Console.WriteLine("0) dodaj kontener");
+                if (DataBlockList.Count() > 0)
+                {
+                    Console.WriteLine("1) rekalkuluj Funkcje skrótu");
+                    Console.WriteLine("2) wyświetl kontener (podaj numer)");
+                    Console.WriteLine("3) edytuj kontener");
+                }
+                Console.Write("\r\nWybierz opcję: ");
+
+                switch (Console.ReadLine())
+                {
+                    case "0":
+                        Container a = new Container(counter_container);
+
+                        byte[] temp1 = a.shaContainer(a);
+                        string temp = BitConverter.ToString(temp1).Replace("-", "");
+                        a.ssha512 = temp;
+                        a.userID = u.userID;
+                        a.signed = a.Encrypt(a.ssha512, u.pKey);
+                        string xx = Container.Decrypt(a.signed, a.userID);
+                        Console.WriteLine("Kontener: " + counter_container.ToString());
+                        Console.WriteLine("SHA512:");
+                        Console.Write(a.ssha512);
+                        Console.WriteLine();
+                        Console.WriteLine();
+                        Console.WriteLine("  * * *  ");
+                        Console.WriteLine("Podpisane SHA512:");
+                        Console.WriteLine();
+                        Console.Write(a.signed);
+                        Console.WriteLine();
+                        Console.WriteLine("  * * *  ");
+                        Console.WriteLine("Dekodowane SHA512:");
+                        Console.WriteLine();
+                        Console.WriteLine(xx);
+                        Console.WriteLine("  * * *  * * * ");
+                        Console.WriteLine();
+                        counter_container++;
+
+
+                        buffer.Add(a);
+                        if (buffer.Count >= 4)
+                        {
+                            counter++;
+                            DataBlock x = new DataBlock(buffer[0], buffer[1], buffer[2], buffer[3]);
+                            DataBlockList.Add(x);
+                            byte[] y = x.calculateroot(x);
+                            chain.Add(new Block(y));
+                            Console.Write("------------------------------");
+                            Console.Write(counter);
+                            Console.WriteLine("------------------------------");
+
+                            Console.WriteLine(chain.LastOrDefault()?.ToString());
+                            Console.WriteLine($"Łańcuch jest prawidłowy:{chain.IsValid()}");
+                            buffer.Clear();
+                        }
+                        break;
+                    case "1":
+                        Console.Write("Lista kontenerów: ");
+                        for (int i = 0; i < counter * 4; i++)
+                        {
+                            Console.Write(i.ToString() + ", ");
+                        }
+                        Console.WriteLine();
+                        Console.WriteLine("Podaj numer kontenera do rekalkulacji funkcji skrótu:");
+
+                        int container_num_calc;
+                        ConsoleKeyInfo UserInput_calc = Console.ReadKey();
+
+                        if (char.IsDigit(UserInput_calc.KeyChar))
+                        {
+                            container_num_calc = int.Parse(UserInput_calc.KeyChar.ToString());
+                        }
+                        else
+                        {
+                            container_num_calc = 0;
+                        }
+                        int varmod4_calc = (container_num_calc + 1);
+                        int mod4_calc = (container_num_calc % 4);
+                        int result_calc = (varmod4_calc - mod4_calc -1) / 4;
+
+                        byte[] check = DataBlockList[result_calc].calculateroot(DataBlockList[result_calc]);
+                        result_calc++;
+                        string temp2 = BitConverter.ToString(check).Replace("-", "");
+                        string temp3 = BitConverter.ToString(chain._items[result_calc].Data).Replace("-", "");
+                        Console.WriteLine("  Skalkulowano:  ");
+                        Console.WriteLine(temp2);
+                        Console.WriteLine("  Poprzednio:  ");
+                        Console.WriteLine(temp3);
+                        break;
+                    case "2":
+                        Console.Write("Lista kontenerów: ");
+                        for (int i = 0; i < counter * 4; i++)
+                        {
+                            Console.Write(i.ToString() + ", ");
+                        }
+                        Console.WriteLine();
+                        Console.WriteLine("Podaj numer kontenera (przy podaniu błędnego numeru wyświetli się 1 kontener)");
+
+                        int container_num;
+                        ConsoleKeyInfo UserInput = Console.ReadKey();
+
+                        if (char.IsDigit(UserInput.KeyChar))
+                        {
+                            container_num = int.Parse(UserInput.KeyChar.ToString());
+                        }
+                        else
+                        {
+                            container_num = 0;
+                        }
+                        int varmod4= (container_num + 1);
+                        int mod4 = (container_num % 4);
+                        int result = (varmod4 - mod4-1) / 4;
+                        Console.WriteLine("Kontener: " + result);
+                        Console.WriteLine("  * * *  ");
+                        if (mod4 == 0)
+                        {
+                            Console.WriteLine("  ID: " + DataBlockList[result].C1.ID.ToString());
+                            Console.WriteLine("  WE: " + DataBlockList[result].C1.WE.ToString());
+                            Console.WriteLine("  NS: " + DataBlockList[result].C1.NS.ToString());
+                            Console.WriteLine("  Temperatura: " + DataBlockList[result].C1.temperature.ToString());
+                            Console.WriteLine("  Wilgotność: " + DataBlockList[result].C1.humidity.ToString());
+                            Console.WriteLine("  Data dodania: " + DataBlockList[result].C1.timestamp.ToString());
+                            Console.WriteLine("  * * *  ");
+                        } else if (mod4 == 1)
+                        {
+                            Console.WriteLine("  ID: " + DataBlockList[result].C2.ID.ToString());
+                            Console.WriteLine("  WE: " + DataBlockList[result].C2.WE.ToString());
+                            Console.WriteLine("  NS: " + DataBlockList[result].C2.NS.ToString());
+                            Console.WriteLine("  Temperatura: " + DataBlockList[result].C2.temperature.ToString());
+                            Console.WriteLine("  Wilgotność: " + DataBlockList[result].C2.humidity.ToString());
+                            Console.WriteLine("  Data dodania: " + DataBlockList[result].C2.timestamp.ToString());
+                            Console.WriteLine("  * * *  ");
+                        }
+                        else if (mod4 == 2)
+                        {
+                            Console.WriteLine("  ID: " + DataBlockList[result].C3.ID.ToString());
+                            Console.WriteLine("  WE: " + DataBlockList[result].C3.WE.ToString());
+                            Console.WriteLine("  NS: " + DataBlockList[result].C3.NS.ToString());
+                            Console.WriteLine("  Temperatura: " + DataBlockList[result].C3.temperature.ToString());
+                            Console.WriteLine("  Wilgotność: " + DataBlockList[result].C3.humidity.ToString());
+                            Console.WriteLine("  Data dodania: " + DataBlockList[result].C3.timestamp.ToString());
+                            Console.WriteLine("  * * *  ");
+                        }
+                        else if (mod4 == 3)
+                        {
+                            Console.WriteLine("  ID: " + DataBlockList[result].C4.ID.ToString());
+                            Console.WriteLine("  WE: " + DataBlockList[result].C4.WE.ToString());
+                            Console.WriteLine("  NS: " + DataBlockList[result].C4.NS.ToString());
+                            Console.WriteLine("  Temperatura: " + DataBlockList[result].C4.temperature.ToString());
+                            Console.WriteLine("  Wilgotność: " + DataBlockList[result].C4.humidity.ToString());
+                            Console.WriteLine("  Data dodania: " + DataBlockList[result].C4.timestamp.ToString());
+                            Console.WriteLine("  * * *  ");
+                        }
+                        break;
+                    case "3":
+                        Console.WriteLine();
+                        Console.Write("Lista kontenerów: ");
+                        for (int i = 0; i < counter * 4; i++)
+                        {
+                            Console.Write(i.ToString() + ", ");
+                        }
+                        Console.WriteLine("Podaj numer kontenera którego temperature chcesz zmienić na 100:");
+
+                        int container_num_change;
+                        ConsoleKeyInfo UserInputChange = Console.ReadKey();
+
+                        if (char.IsDigit(UserInputChange.KeyChar))
+                        {
+                            container_num_change = int.Parse(UserInputChange.KeyChar.ToString());
+                        }
+                        else
+                        {
+                            container_num_change = 0;
+                        }
+                        int varmod4_change = (container_num_change + 1);
+                        int mod4_change = (container_num_change % 4);
+                        int result_change = (varmod4_change - mod4_change -1) / 4;
+                        if (mod4_change == 0)
+                        {
+                            DataBlockList[result_change].C1.temperature = 100;
+                        }
+                        else if (mod4_change == 1)
+                        {
+                            DataBlockList[result_change].C2.temperature = 100;
+                        }
+                        else if (mod4_change == 2)
+                        {
+                            DataBlockList[result_change].C3.temperature = 100;
+                        }
+                        else if (mod4_change == 3)
+                        {
+                            DataBlockList[result_change].C4.temperature = 100;
+                        }
+                        Console.WriteLine(" Zmieniono wartość temperaury kontenera "+ container_num_change +" 100  ");
+                        break;
+                }
+            }
+        }
+
+    }
+}
